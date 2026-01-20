@@ -1,0 +1,312 @@
+// Prisma Schema for Lucidis Platform
+// Multi-tenant architecture with Row-Level Security
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTHENTICATION & TENANT HIERARCHY
+// ============================================
+
+model AppOwner {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts        Account[]
+  refreshTokens   AppOwnerRefreshToken[]
+
+  @@map("app_owners")
+}
+
+model Account {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  appOwnerId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  appOwner     AppOwner      @relation(fields: [appOwnerId], references: [id], onDelete: Cascade)
+  workspaces   Workspace[]
+  accountUsers AccountUser[]
+
+  @@map("accounts")
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String
+  accountId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  departments  Department[]
+  conversations Conversation[]
+  workspaceUsers WorkspaceUser[]
+
+  @@unique([accountId, slug])
+  @@map("workspaces")
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String
+  workspaceId String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  teams          Team[]
+  departmentUsers DepartmentUser[]
+
+  @@unique([workspaceId, slug])
+  @@map("departments")
+}
+
+model Team {
+  id           String   @id @default(uuid())
+  name         String
+  slug         String
+  departmentId String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  teamUsers   TeamUser[]
+
+  @@unique([departmentId, slug])
+  @@map("teams")
+}
+
+// ============================================
+// USER MANAGEMENT
+// ============================================
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  firstName String?
+  lastName  String?
+  phone     String?
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accountUsers       AccountUser[]
+  workspaceUsers     WorkspaceUser[]
+  teamUsers          TeamUser[]
+  departmentUsers    DepartmentUser[]
+  refreshTokens      RefreshToken[]
+  assignedConversations Conversation[]
+
+  @@map("users")
+}
+
+enum AccountRole {
+  ADMIN
+  MEMBER
+}
+
+enum WorkspaceRole {
+  ADMIN
+  MEMBER
+}
+
+enum TeamRole {
+  LEAD
+  MEMBER
+}
+
+enum DepartmentRole {
+  DEPARTMENT_MANAGER
+  HUMAN_SUPPORT
+  MEMBER
+}
+
+model AccountUser {
+  id        String      @id @default(uuid())
+  userId    String
+  accountId String
+  role      AccountRole @default(MEMBER)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, accountId])
+  @@map("account_users")
+}
+
+model WorkspaceUser {
+  id          String        @id @default(uuid())
+  userId      String
+  workspaceId String
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@map("workspace_users")
+}
+
+model TeamUser {
+  id        String   @id @default(uuid())
+  userId    String
+  teamId    String
+  role      TeamRole @default(MEMBER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, teamId])
+  @@map("team_users")
+}
+
+model DepartmentUser {
+  id           String         @id @default(uuid())
+  userId       String
+  departmentId String
+  role         DepartmentRole @default(MEMBER)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, departmentId])
+  @@map("department_users")
+}
+
+// ============================================
+// UNIFIED INBOX
+// ============================================
+
+model Contact {
+  id        String   @id @default(uuid())
+  email     String
+  name      String?
+  phone     String?
+  avatar    String?
+  metadata  Json?    // Additional contact information
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversations Conversation[]
+
+  @@unique([email])
+  @@map("contacts")
+}
+
+model Conversation {
+  id          String   @id @default(uuid())
+  workspaceId String
+  contactId   String
+  subject     String?
+  status      ConversationStatus @default(OPEN)
+  priority    ConversationPriority @default(NORMAL)
+  metadata    Json?
+  lastMessageAt DateTime?
+  assignedUserId String?
+  assignedAt    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact       Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedUser  User?     @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages      Message[]
+
+  @@index([workspaceId, lastMessageAt])
+  @@index([workspaceId, status])
+  @@index([assignedUserId])
+  @@map("conversations")
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum ConversationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  fromEmail      String
+  fromName       String?
+  toEmail        String
+  toName         String?
+  subject        String?
+  body           String
+  bodyHtml       String?
+  isRead         Boolean  @default(false)
+  isInternal     Boolean  @default(false) // Internal notes vs external messages
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ============================================
+// AUTHENTICATION
+// ============================================
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+model AppOwnerRefreshToken {
+  id        String   @id @default(uuid())
+  appOwnerId String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  appOwner AppOwner @relation(fields: [appOwnerId], references: [id], onDelete: Cascade)
+
+  @@index([appOwnerId])
+  @@index([token])
+  @@map("app_owner_refresh_tokens")
+}
