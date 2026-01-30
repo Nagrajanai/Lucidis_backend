@@ -33,7 +33,7 @@ class AccountService {
 
   async getAccounts(appOwnerId) {
     const cacheKey = `accounts:appOwner:${appOwnerId}`;
-    
+
     // Try cache first
     const cached = await redis.get(cacheKey);
     if (cached) {
@@ -50,19 +50,33 @@ class AccountService {
             slug: true,
           },
         },
+        _count: {
+          select: {
+            workspaces: true,
+            accountUsers: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    // Cache for 5 minutes
-    await redis.setex(cacheKey, 300, JSON.stringify(accounts));
+    // Transform the response to include counts
+    const accountsWithCounts = accounts.map(account => ({
+      ...account,
+      userCount: account._count.accountUsers,
+      workspaceCount: account._count.workspaces,
+      _count: undefined, // Remove the _count field from response
+    }));
 
-    return accounts;
+    // Cache for 5 minutes
+    await redis.setex(cacheKey, 300, JSON.stringify(accountsWithCounts));
+
+    return accountsWithCounts;
   }
 
   async getAccountById(accountId, appOwnerId) {
     const cacheKey = `account:${accountId}`;
-    
+
     // Try cache first
     const cached = await redis.get(cacheKey);
     if (cached) {
@@ -88,6 +102,12 @@ class AccountService {
             },
           },
         },
+        _count: {
+          select: {
+            workspaces: true,
+            accountUsers: true,
+          },
+        },
       },
     });
 
@@ -95,10 +115,18 @@ class AccountService {
       throw new Error('Account not found');
     }
 
-    // Cache for 5 minutes
-    await redis.setex(cacheKey, 300, JSON.stringify(account));
+    // Add counts to the response
+    const accountWithCounts = {
+      ...account,
+      userCount: account._count.accountUsers,
+      workspaceCount: account._count.workspaces,
+      _count: undefined, // Remove the _count field from response
+    };
 
-    return account;
+    // Cache for 5 minutes
+    await redis.setex(cacheKey, 300, JSON.stringify(accountWithCounts));
+
+    return accountWithCounts;
   }
 
   async updateAccount(accountId, appOwnerId, data) {
