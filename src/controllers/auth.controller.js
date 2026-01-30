@@ -1,6 +1,8 @@
 const { AuthService } = require('../services/auth.service');
+const { InvitationService } = require('../services/invitation.service');
 
 const authService = new AuthService();
+const invitationService = new InvitationService();
 
 class AuthController {
   async registerAppOwner(req, res) {
@@ -14,9 +16,16 @@ class AuthController {
           user: {
             id: result.appOwner.id,
             email: result.appOwner.email,
-            name: result.appOwner.name,
+            fullName: result.appOwner.name,
+            globalRole: 'APP_OWNER',
           },
-          tokens: result.tokens,
+          context: {
+            accounts: [], // New AppOwner has no accounts yet
+            workspaces: [],
+            departments: [],
+            teams: [],
+          },
+          auth: result.tokens,
         },
         message: 'AppOwner registered successfully',
       };
@@ -34,21 +43,21 @@ class AuthController {
   async registerUser(req, res) {
     try {
       const data = req.body;
-      const result = await authService.registerUser(data);
+      const { token } = req.query;
+
+      if (!token) {
+        res.status(400).json({
+          success: false,
+          error: 'Invitation token is required',
+        });
+        return;
+      }
+
+      await invitationService.acceptInvitationAndRegisterUser(token, data);
 
       const response = {
         success: true,
-        data: {
-          user: {
-            id: result.user.id,
-            email: result.user.email,
-            firstName: result.user.firstName,
-            lastName: result.user.lastName,
-            phone: result.user.phone,
-          },
-          tokens: result.tokens,
-        },
-        message: 'User registered successfully',
+        message: 'Invitation accepted and user registered successfully. Please login to continue.',
       };
 
       res.status(201).json(response);
@@ -66,36 +75,11 @@ class AuthController {
       const data = req.body;
       const result = await authService.login(data);
 
-      let response;
-      if (result.userType === 'AppOwner') {
-        response = {
-          success: true,
-          data: {
-            user: {
-              id: result.appOwner.id,
-              email: result.appOwner.email,
-              name: result.appOwner.name,
-            },
-            tokens: result.tokens,
-          },
-          message: 'Login successful',
-        };
-      } else {
-        response = {
-          success: true,
-          data: {
-            user: {
-              id: result.user.id,
-              email: result.user.email,
-              firstName: result.user.firstName,
-              lastName: result.user.lastName,
-              phone: result.user.phone,
-            },
-            tokens: result.tokens,
-          },
-          message: 'Login successful',
-        };
-      }
+      const response = {
+        success: true,
+        data: result,
+        message: 'Login successful',
+      };
 
       res.status(200).json(response);
     } catch (error) {
@@ -123,7 +107,7 @@ class AuthController {
 
       const response = {
         success: true,
-        data: { tokens },
+        data: { auth: tokens },
         message: 'Token refreshed successfully',
       };
 

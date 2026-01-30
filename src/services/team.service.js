@@ -1,6 +1,8 @@
 const prisma = require('../config/database');
 const redis = require('../config/redis');
 const { hashPassword } = require('../utils/password');
+const { logger } = require('../utils/logger');
+const { InvitationService } = require('./invitation.service');
 
 class TeamService {
   async createTeam(departmentId, workspaceId, accountId, data) {
@@ -64,7 +66,7 @@ class TeamService {
     }
 
     const cacheKey = `teams:department:${departmentId}`;
-    
+
     // Try cache first
     const cached = await redis.get(cacheKey);
     if (cached) {
@@ -110,7 +112,7 @@ class TeamService {
     }
 
     const cacheKey = `team:${teamId}`;
-    
+
     // Try cache first
     const cached = await redis.get(cacheKey);
     if (cached) {
@@ -252,7 +254,16 @@ class TeamService {
       include: {
         department: {
           include: {
-            workspace: true,
+            workspace: {
+              include: {
+                account: {
+                  select: {
+                    id: true,
+                    name: true,
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -271,16 +282,11 @@ class TeamService {
     }
 
     // Verify inviter has permission to invite
-    // Allowed: TEAM_LEAD (of this team), WORKSPACE_ADMIN, ACCOUNT_ADMIN
+    // Allowed: TEAM_LEAD (of this team), WORKSPACE_ADMIN
     let hasPermission = false;
 
-    // Check if inviter is ACCOUNT_ADMIN
-    if (inviterInfo.accountRole === 'ADMIN') {
-      hasPermission = true;
-    }
-
     // Check if inviter is WORKSPACE_ADMIN
-    if (!hasPermission && inviterInfo.workspaceRole === 'ADMIN') {
+    if (inviterInfo.workspaceRole === 'ADMIN') {
       hasPermission = true;
     }
 
@@ -301,30 +307,7 @@ class TeamService {
     }
 
     if (!hasPermission) {
-      throw new Error('Insufficient permissions. Only TEAM_LEAD, WORKSPACE_ADMIN, or ACCOUNT_ADMIN can invite users to teams');
-    }
-
-    // Find user by email (must be existing user)
-    const user = await prisma.user.findUnique({
-      where: { email: data.email },
-    });
-
-    if (!user) {
-      throw new Error('User not found. User must exist before being invited to a team');
-    }
-
-    // Verify target user belongs to the same workspace (via workspace_users)
-    const workspaceUser = await prisma.workspaceUser.findUnique({
-      where: {
-        userId_workspaceId: {
-          userId: user.id,
-          workspaceId: workspaceId,
-        },
-      },
-    });
-
-    if (!workspaceUser) {
-      throw new Error('User does not belong to this workspace. User must be added to workspace first');
+      throw new Error('Insufficient permissions. Only TEAM_LEAD or WORKSPACE_ADMIN can invite users to teams');
     }
 
     // Validate role
@@ -332,39 +315,86 @@ class TeamService {
       throw new Error('Role must be LEAD or MEMBER');
     }
 
-    // Add user to team
-    const teamUser = await prisma.teamUser.upsert({
+    // Find user by email
+    const user = await prisma.user.findUnique({
+      where: { email: data.email },
+    });
+
+    if (!user) {
+      throw new Error('User not found. User must be added to the Department first.');
+    }
+
+    // Verify user belongs to the same department (via department_users)
+    const departmentUser = await prisma.departmentUser.findUnique({
+      where: {
+        userId_departmentId: {
+          userId: user.id,
+          departmentId: team.departmentId,
+        },
+      },
+    });
+
+    if (!departmentUser || departmentUser.status !== 'ACTIVE') {
+      throw new Error('User is not an active member of this department. Add to department first.');
+    }
+
+    // Check if user is already in this team
+    const existingTeamUser = await prisma.teamUser.findUnique({
       where: {
         userId_teamId: {
           userId: user.id,
           teamId,
         },
       },
-      create: {
-        userId: user.id,
-        teamId,
-        role: data.role,
-      },
-      update: {
-        role: data.role,
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-      },
     });
 
-    // Invalidate cache
-    await redis.del(`team:${teamId}`);
-    await redis.del(`teams:department:*`);
+    if (existingTeamUser) {
+      throw new Error('User is already assigned to this team');
+    }
 
-    return teamUser;
+    // Create membership with userId and status = ACTIVE
+    try {
+      const teamUser = await prisma.teamUser.create({
+        data: {
+          userId: user.id,
+          teamId,
+          role: data.role,
+          status: 'ACTIVE',
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      });
+
+      // Invalidate cache
+      await redis.del(`team:${teamId}`);
+      await redis.del(`teams:department:${team.departmentId}`);
+
+      // Send notification email
+      try {
+        const invitationService = new InvitationService();
+        await invitationService.sendAllocationEmail(user.email, {
+          type: 'TEAM',
+          entityName: team.name,
+          accountName: team.department.workspace.account.name,
+          role: data.role,
+        });
+      } catch (emailError) {
+        logger.error('Failed to send assignment email:', emailError);
+      }
+
+      return teamUser;
+    } catch (error) {
+      logger.error('Error adding user to team:', error);
+      throw new Error('Failed to add user to team');
+    }
   }
 }
 

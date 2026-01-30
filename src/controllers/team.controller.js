@@ -318,6 +318,7 @@ class TeamController {
         userId: req.user.id,
         accountRole: req.tenant?.accountRole,
         workspaceRole: req.tenant?.workspaceRole,
+        isAppOwner: req.user?.isAppOwner || false,
       };
 
       const teamUser = await teamService.inviteUserToTeam(

@@ -21,7 +21,17 @@ const validateUserId = validate({
 
 const validateAddUser = validate({
   params: ['departmentId'],
-  body: ['userId', 'role'],
+  body: ['role'],
+  custom: (req) => {
+    const errors = [];
+    if (!req.body.userId && !req.body.email) {
+      errors.push({
+        path: 'body',
+        message: 'Either userId or email is required',
+      });
+    }
+    return errors;
+  },
 });
 
 const validateUpdateRole = validate({
@@ -29,33 +39,34 @@ const validateUpdateRole = validate({
   body: ['role'],
 });
 
-// Write operations: Authorization is handled in service layer
-// Allowed: ACCOUNT_ADMIN, WORKSPACE_ADMIN, DEPARTMENT_MANAGER (for their own department)
+// Write operations: Restricted to WORKSPACE_ADMIN to match department CRUD
 router.post(
   '/:departmentId/users',
+  requireRole(UserRole.WORKSPACE_ADMIN),
   validateAddUser,
   departmentUserController.addUserToDepartment.bind(departmentUserController)
 );
 
-// Read operations allow any workspace member (no role check)
+// Read operations allow any workspace member
 router.get(
   '/:departmentId/users',
+  requireRole(UserRole.WORKSPACE_MEMBER),
   validateDepartmentId,
   departmentUserController.getDepartmentUsers.bind(departmentUserController)
 );
 
-// Write operations: Authorization is handled in service layer
-// Allowed: ACCOUNT_ADMIN, WORKSPACE_ADMIN, DEPARTMENT_MANAGER (for their own department)
+// Write operations: Restricted to WORKSPACE_ADMIN
 router.patch(
   '/:departmentId/users/:userId',
+  requireRole(UserRole.WORKSPACE_ADMIN),
   validateUpdateRole,
   departmentUserController.updateDepartmentUserRole.bind(departmentUserController)
 );
 
-// Write operations: Authorization is handled in service layer
-// Allowed: ACCOUNT_ADMIN, WORKSPACE_ADMIN, DEPARTMENT_MANAGER (for their own department)
+// Write operations: Restricted to WORKSPACE_ADMIN
 router.delete(
   '/:departmentId/users/:userId',
+  requireRole(UserRole.WORKSPACE_ADMIN),
   validateDepartmentId,
   validateUserId,
   departmentUserController.removeUserFromDepartment.bind(departmentUserController)

@@ -41,7 +41,7 @@ class AuthService {
     return { appOwner, tokens };
   }
 
-  async registerUser(data) {
+  async createUser(data) {
     // Check if user already exists
     const existingUser = await prisma.user.findUnique({
       where: { email: data.email },
@@ -63,6 +63,12 @@ class AuthService {
         phone: data.phone || null, // Optional phone field
       },
     });
+
+    return user;
+  }
+
+  async registerUser(data) {
+    const user = await this.createUser(data);
 
     const tokens = {
       accessToken: generateAccessToken(user.id, user.email),
@@ -108,7 +114,27 @@ class AuthService {
         },
       });
 
-      return { appOwner, tokens, userType: 'AppOwner' };
+      // Fetch accounts owned by AppOwner
+      const accounts = await prisma.account.findMany({
+        where: { appOwnerId: appOwner.id },
+        select: { id: true },
+      });
+
+      return {
+        user: {
+          id: appOwner.id,
+          email: appOwner.email,
+          fullName: appOwner.name,
+          globalRole: 'APP_OWNER',
+        },
+        context: {
+          accounts: accounts.map((a) => ({ accountId: a.id, role: 'OWNER' })),
+          workspaces: [],
+          departments: [],
+          teams: [],
+        },
+        auth: tokens,
+      };
     }
 
     // Try User
@@ -144,7 +170,43 @@ class AuthService {
       },
     });
 
-    return { user, tokens, userType: 'User' };
+    // Fetch active memberships
+    const [accountUsers, workspaceUsers, departmentUsers, teamUsers] = await Promise.all([
+      prisma.accountUser.findMany({
+        where: { userId: user.id, status: 'ACTIVE' },
+        select: { accountId: true, role: true },
+      }),
+      prisma.workspaceUser.findMany({
+        where: { userId: user.id, status: 'ACTIVE' },
+        select: { workspaceId: true, role: true },
+      }),
+      prisma.departmentUser.findMany({
+        where: { userId: user.id, status: 'ACTIVE' },
+        select: { departmentId: true, role: true },
+      }),
+      prisma.teamUser.findMany({
+        where: { userId: user.id, status: 'ACTIVE' },
+        select: { teamId: true, role: true },
+      }),
+    ]);
+
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: fullName || user.email, // Fallback if name is empty
+        globalRole: 'USER',
+      },
+      context: {
+        accounts: accountUsers.map((m) => ({ accountId: m.accountId, role: m.role })),
+        workspaces: workspaceUsers.map((m) => ({ workspaceId: m.workspaceId, role: m.role })),
+        departments: departmentUsers.map((m) => ({ departmentId: m.departmentId, role: m.role })),
+        teams: teamUsers.map((m) => ({ teamId: m.teamId, role: m.role })),
+      },
+      auth: tokens,
+    };
   }
 
   async refreshToken(refreshToken) {

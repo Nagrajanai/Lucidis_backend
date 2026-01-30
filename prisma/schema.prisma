@@ -22,23 +22,25 @@ model AppOwner {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  accounts        Account[]
-  refreshTokens   AppOwnerRefreshToken[]
+  accounts      Account[]
+  refreshTokens AppOwnerRefreshToken[]
+  sentInvitations Invitation[]   @relation("AppOwnerInvitedBy")
 
   @@map("app_owners")
 }
 
 model Account {
-  id        String   @id @default(uuid())
-  name      String
-  slug      String   @unique
+  id         String   @id @default(uuid())
+  name       String
+  slug       String   @unique
   appOwnerId String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   appOwner     AppOwner      @relation(fields: [appOwnerId], references: [id], onDelete: Cascade)
   workspaces   Workspace[]
   accountUsers AccountUser[]
+  invitations  Invitation[]
 
   @@map("accounts")
 }
@@ -51,9 +53,9 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  departments  Department[]
-  conversations Conversation[]
+  account        Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  departments    Department[]
+  conversations  Conversation[]
   workspaceUsers WorkspaceUser[]
 
   @@unique([accountId, slug])
@@ -68,8 +70,8 @@ model Department {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  teams          Team[]
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  teams           Team[]
   departmentUsers DepartmentUser[]
 
   @@unique([workspaceId, slug])
@@ -85,7 +87,7 @@ model Team {
   updatedAt    DateTime @updatedAt
 
   department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
-  teamUsers   TeamUser[]
+  teamUsers  TeamUser[]
 
   @@unique([departmentId, slug])
   @@map("teams")
@@ -107,14 +109,46 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  accountUsers       AccountUser[]
-  workspaceUsers     WorkspaceUser[]
-  teamUsers          TeamUser[]
-  departmentUsers    DepartmentUser[]
-  refreshTokens      RefreshToken[]
+  accountUsers          AccountUser[]
+  workspaceUsers        WorkspaceUser[]
+  teamUsers             TeamUser[]
+  departmentUsers       DepartmentUser[]
+  refreshTokens         RefreshToken[]
   assignedConversations Conversation[]
+  invitations           Invitation[]     @relation("InvitedBy")
 
   @@map("users")
+}
+
+model Invitation {
+  id              String           @id @default(uuid())
+  email           String
+  accountId       String
+  invitedByUserId String?
+  invitedByAppOwnerId String?
+  scope           InvitationScope
+  targetId        String?
+  role            String // Role depends on scope (AccountRole, WorkspaceRole, DepartmentRole, TeamRole)
+  status          InvitationStatus @default(INVITED)
+  tokenHash       String
+  expiresAt       DateTime
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  account         Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  invitedBy       User?            @relation("InvitedBy", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  invitedByAppOwner AppOwner?      @relation("AppOwnerInvitedBy", fields: [invitedByAppOwnerId], references: [id], onDelete: Cascade)
+  
+  accountUsers    AccountUser[]
+  workspaceUsers  WorkspaceUser[]
+  departmentUsers DepartmentUser[]
+  teamUsers       TeamUser[]
+
+  @@index([email])
+  @@index([accountId])
+  @@index([tokenHash])
+  @@index([status])
+  @@map("invitations")
 }
 
 enum AccountRole {
@@ -138,63 +172,110 @@ enum DepartmentRole {
   MEMBER
 }
 
-model AccountUser {
-  id        String      @id @default(uuid())
-  userId    String
-  accountId String
-  role      AccountRole @default(MEMBER)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+enum InvitationScope {
+  ACCOUNT
+  WORKSPACE
+  DEPARTMENT
+  TEAM
+}
 
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+enum InvitationStatus {
+  INVITED
+  ACCEPTED
+  EXPIRED
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  REMOVED
+}
+
+model AccountUser {
+  id           String           @id @default(uuid())
+  userId       String?
+  email        String?
+  accountId    String
+  role         AccountRole      @default(MEMBER)
+  status       MembershipStatus @default(ACTIVE)
+  invitationId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  user       User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account    Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  invitation Invitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
 
   @@unique([userId, accountId])
+  @@unique([email, accountId])
+  @@index([email])
+  @@index([status])
   @@map("account_users")
 }
 
 model WorkspaceUser {
-  id          String        @id @default(uuid())
-  userId      String
-  workspaceId String
-  role        WorkspaceRole @default(MEMBER)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id           String           @id @default(uuid())
+  userId       String?
+  email        String?
+  workspaceId  String
+  role         WorkspaceRole    @default(MEMBER)
+  status       MembershipStatus @default(ACTIVE)
+  invitationId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user       User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitation Invitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
 
   @@unique([userId, workspaceId])
+  @@unique([email, workspaceId])
+  @@index([email])
+  @@index([status])
   @@map("workspace_users")
 }
 
 model TeamUser {
-  id        String   @id @default(uuid())
-  userId    String
-  teamId    String
-  role      TeamRole @default(MEMBER)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String           @id @default(uuid())
+  userId       String?
+  email        String?
+  teamId       String
+  role         TeamRole         @default(MEMBER)
+  status       MembershipStatus @default(ACTIVE)
+  invitationId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user       User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team       Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  invitation Invitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
 
   @@unique([userId, teamId])
+  @@unique([email, teamId])
+  @@index([email])
+  @@index([status])
   @@map("team_users")
 }
 
 model DepartmentUser {
-  id           String         @id @default(uuid())
-  userId       String
+  id           String           @id @default(uuid())
+  userId       String?
+  email        String?
   departmentId String
-  role         DepartmentRole @default(MEMBER)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  role         DepartmentRole   @default(MEMBER)
+  status       MembershipStatus @default(ACTIVE)
+  invitationId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  user       User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department  @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  invitation Invitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
 
   @@unique([userId, departmentId])
+  @@unique([email, departmentId])
+  @@index([email])
+  @@index([status])
   @@map("department_users")
 }
 
@@ -208,7 +289,7 @@ model Contact {
   name      String?
   phone     String?
   avatar    String?
-  metadata  Json?    // Additional contact information
+  metadata  Json? // Additional contact information
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -219,34 +300,36 @@ model Contact {
 }
 
 model Conversation {
-  id          String   @id @default(uuid())
-  workspaceId String
-  contactId   String
-  subject     String?
-  status      ConversationStatus @default(OPEN)
-  priority    ConversationPriority @default(NORMAL)
-  metadata    Json?
-  lastMessageAt DateTime?
-  assignedUserId String?
-  assignedAt    DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String               @id @default(uuid())
+  workspaceId     String
+  contactId       String
+  subject         String?
+  status          ConversationStatus   @default(TODO)
+  priority        ConversationPriority @default(NORMAL)
+  metadata        Json?
+  lastMessageAt   DateTime?
+  assignedUserId  String?
+  assignedAt      DateTime?
+  statusUpdatedAt DateTime             @default(now())
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
-  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  contact       Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  assignedUser  User?     @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
-  messages      Message[]
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact      Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedUser User?     @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages     Message[]
 
   @@index([workspaceId, lastMessageAt])
   @@index([workspaceId, status])
+  @@index([status])
   @@index([assignedUserId])
   @@map("conversations")
 }
 
 enum ConversationStatus {
-  OPEN
-  PENDING
-  RESOLVED
+  TODO
+  ASSIGNED
+  ESCALATED
   CLOSED
 }
 
@@ -298,11 +381,11 @@ model RefreshToken {
 }
 
 model AppOwnerRefreshToken {
-  id        String   @id @default(uuid())
+  id         String   @id @default(uuid())
   appOwnerId String
-  token     String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  token      String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
 
   appOwner AppOwner @relation(fields: [appOwnerId], references: [id], onDelete: Cascade)
 

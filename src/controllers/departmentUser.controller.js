@@ -51,6 +51,7 @@ class DepartmentUserController {
       // Pass caller info for role verification
       const callerInfo = {
         userId: req.user.id,
+        isAppOwner: !!req.user.isAppOwner,
         accountRole: req.tenant?.accountRole,
         workspaceRole: req.tenant?.workspaceRole,
       };
@@ -72,7 +73,7 @@ class DepartmentUserController {
       res.status(201).json(response);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to add user to department';
-      
+
       // Determine status code based on error type
       let statusCode = 400;
       if (errorMessage.includes('not found') || errorMessage.includes('not assigned')) {
@@ -161,7 +162,7 @@ class DepartmentUserController {
       res.status(200).json(response);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update department user role';
-      
+
       // Determine status code based on error type
       let statusCode = 400;
       if (errorMessage.includes('not found') || errorMessage.includes('not assigned')) {
@@ -246,7 +247,7 @@ class DepartmentUserController {
       res.status(200).json(response);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to remove user from department';
-      
+
       // Determine status code based on error type
       let statusCode = 400;
       if (errorMessage.includes('not found') || errorMessage.includes('not assigned')) {

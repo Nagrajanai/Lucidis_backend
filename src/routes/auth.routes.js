@@ -27,7 +27,7 @@ const validateRefreshToken = validate({
 });
 
 router.post('/register/app-owner', validateRegisterAppOwner, authController.registerAppOwner.bind(authController));
-router.post('/register/user', validateRegisterUser, authController.registerUser.bind(authController));
+router.post('/accept-invitation/user', validateRegisterUser, authController.registerUser.bind(authController));
 router.post('/login', validateLogin, authController.login.bind(authController));
 router.post('/refresh-token', validateRefreshToken, authController.refreshToken.bind(authController));
 router.post('/logout', authController.logout.bind(authController));

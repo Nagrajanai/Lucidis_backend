@@ -24,16 +24,16 @@ const validateInviteUser = validate({
   body: ['email', 'role'],
 });
 
-// Write operations require ACCOUNT_ADMIN or WORKSPACE_ADMIN
-router.post('/', requireRole(UserRole.ACCOUNT_ADMIN, UserRole.WORKSPACE_ADMIN), validateCreateTeam, teamController.createTeam.bind(teamController));
-// Read operations allow any workspace member (no role check)
-router.get('/', teamController.getTeams.bind(teamController));
-router.get('/:id', validateTeamId, teamController.getTeamById.bind(teamController));
-// Write operations require ACCOUNT_ADMIN or WORKSPACE_ADMIN
-router.put('/:id', requireRole(UserRole.ACCOUNT_ADMIN, UserRole.WORKSPACE_ADMIN), validateTeamId, teamController.updateTeam.bind(teamController));
-router.delete('/:id', requireRole(UserRole.ACCOUNT_ADMIN, UserRole.WORKSPACE_ADMIN), validateTeamId, teamController.deleteTeam.bind(teamController));
-// Invite API - not modifying yet as per requirements
-router.post('/:teamId/invite', validateInviteUser, teamController.inviteUser.bind(teamController));
+// Write operations require WORKSPACE_ADMIN
+router.post('/', requireRole(UserRole.WORKSPACE_ADMIN), validateCreateTeam, teamController.createTeam.bind(teamController));
+// Read operations allow any workspace member
+router.get('/', requireRole(UserRole.WORKSPACE_MEMBER), teamController.getTeams.bind(teamController));
+router.get('/:id', requireRole(UserRole.WORKSPACE_MEMBER), validateTeamId, teamController.getTeamById.bind(teamController));
+// Write operations require WORKSPACE_ADMIN
+router.put('/:id', requireRole(UserRole.WORKSPACE_ADMIN), validateTeamId, teamController.updateTeam.bind(teamController));
+router.delete('/:id', requireRole(UserRole.WORKSPACE_ADMIN), validateTeamId, teamController.deleteTeam.bind(teamController));
+// Invite API - restricted to WORKSPACE_ADMIN
+router.post('/:teamId/invite', requireRole(UserRole.WORKSPACE_ADMIN), validateInviteUser, teamController.inviteUser.bind(teamController));
 
 module.exports = router;
 

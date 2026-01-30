@@ -34,15 +34,15 @@ class AccountController {
 
   async getAccounts(req, res) {
     try {
-      if (!req.user || !req.user.isAppOwner) {
-        res.status(403).json({
-          success: false,
-          error: 'Only AppOwners can view accounts',
-        });
-        return;
-      }
+      // Note: Middleware handles Role check.
+      // But getAccounts service assumes finding all accounts for an AppOwner.
+      // We need separate logic for regular users if we want them to see their accounts?
+      // For now, let's assume getAccounts is primarily for AppOwners or we update service.
 
-      const accounts = await accountService.getAccounts(req.user.id);
+      const userId = req.user.id;
+      const isAppOwner = req.user?.isAppOwner || false;
+
+      const accounts = await accountService.getAccounts(userId, isAppOwner);
 
       const response = {
         success: true,
@@ -61,15 +61,12 @@ class AccountController {
 
   async getAccountById(req, res) {
     try {
-      if (!req.user || !req.user.isAppOwner) {
-        res.status(403).json({
-          success: false,
-          error: 'Only AppOwners can view accounts',
-        });
-        return;
-      }
+      const userId = req.user.id;
+      const isAppOwner = req.user?.isAppOwner || false;
+      const accountId = req.params.id;
 
-      const account = await accountService.getAccountById(req.params.id, req.user.id);
+      // Ensure user has access to THIS account (handled by middleware usually, but service checks too)
+      const account = await accountService.getAccountById(accountId, userId, isAppOwner);
 
       const response = {
         success: true,
@@ -88,15 +85,10 @@ class AccountController {
 
   async updateAccount(req, res) {
     try {
-      if (!req.user || !req.user.isAppOwner) {
-        res.status(403).json({
-          success: false,
-          error: 'Only AppOwners can update accounts',
-        });
-        return;
-      }
+      const userId = req.user.id;
+      const isAppOwner = req.user?.isAppOwner || false;
 
-      const account = await accountService.updateAccount(req.params.id, req.user.id, req.body);
+      const account = await accountService.updateAccount(req.params.id, userId, req.body, isAppOwner);
 
       const response = {
         success: true,
@@ -143,18 +135,12 @@ class AccountController {
 
   async inviteUserToAccount(req, res) {
     try {
-      if (!req.user || !req.user.isAppOwner) {
-        res.status(403).json({
-          success: false,
-          error: 'Only AppOwners can invite users to accounts',
-        });
-        return;
-      }
-
+      const isAppOwner = req.user?.isAppOwner || false;
       const accountUser = await accountService.inviteUserToAccount(
         req.params.accountId,
         req.user.id,
-        req.body
+        req.body,
+        isAppOwner
       );
 
       const response = {
@@ -167,6 +153,28 @@ class AccountController {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to invite user to account';
       res.status(400).json({
+        success: false,
+        error: errorMessage,
+      });
+    }
+  }
+  async getInvitations(req, res) {
+    try {
+      const userId = req.user.id;
+      const isAppOwner = req.user?.isAppOwner || false;
+      const accountId = req.query.accountId || req.tenant?.accountId; // Optional filter
+
+      const invitations = await accountService.getInvitations(userId, isAppOwner, accountId);
+
+      const response = {
+        success: true,
+        data: invitations,
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to get invitations';
+      res.status(500).json({
         success: false,
         error: errorMessage,
       });

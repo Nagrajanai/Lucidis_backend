@@ -1,6 +1,7 @@
 const prisma = require('../config/database');
 const redis = require('../config/redis');
 const { logger } = require('../utils/logger');
+const { InvitationService } = require('./invitation.service');
 
 class DepartmentUserService {
   /**
@@ -15,7 +16,16 @@ class DepartmentUserService {
         workspaceId,
       },
       include: {
-        workspace: true,
+        workspace: {
+          include: {
+            account: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -27,48 +37,37 @@ class DepartmentUserService {
       throw new Error('Department does not belong to this account');
     }
 
-    // Verify caller has permission
-    // Allowed: ACCOUNT_ADMIN, WORKSPACE_ADMIN, DEPARTMENT_MANAGER (for their own department)
+    // Check if caller is WORKSPACE_ADMIN or APP_OWNER
     let hasPermission = false;
-
-    if (callerInfo.accountRole === 'ADMIN') {
+    if (callerInfo.workspaceRole === 'ADMIN' || callerInfo.isAppOwner) {
       hasPermission = true;
     }
 
-    if (!hasPermission && callerInfo.workspaceRole === 'ADMIN') {
-      hasPermission = true;
-    }
-
-    // Check if caller is DEPARTMENT_MANAGER of this specific department
     if (!hasPermission) {
-      const callerDepartmentUser = await prisma.departmentUser.findUnique({
-        where: {
-          userId_departmentId: {
-            userId: callerInfo.userId,
-            departmentId: departmentId,
-          },
-        },
-      });
-
-      if (callerDepartmentUser && callerDepartmentUser.role === 'DEPARTMENT_MANAGER') {
-        hasPermission = true;
-      }
+      throw new Error('Insufficient permissions. Only WORKSPACE_ADMIN can add users to departments');
     }
 
-    if (!hasPermission) {
-      throw new Error('Insufficient permissions. Only ACCOUNT_ADMIN, WORKSPACE_ADMIN, or DEPARTMENT_MANAGER can add users to departments');
+    // Validate role
+    if (data.role !== 'DEPARTMENT_MANAGER' && data.role !== 'HUMAN_SUPPORT' && data.role !== 'MEMBER') {
+      throw new Error('Role must be DEPARTMENT_MANAGER, HUMAN_SUPPORT, or MEMBER');
     }
 
-    // Find user by userId (must be existing user)
-    const user = await prisma.user.findUnique({
-      where: { id: data.userId },
-    });
+    // Verify user exists and is active in workspace
+    let user = null;
+
+    if (data.userId) {
+      user = await prisma.user.findUnique({ where: { id: data.userId } });
+    } else if (data.email) {
+      user = await prisma.user.findUnique({ where: { email: data.email } });
+    } else {
+      throw new Error('Either userId or email is required');
+    }
 
     if (!user) {
-      throw new Error('User not found');
+      throw new Error('User not found. User must be added to the Workspace first.');
     }
 
-    // Verify target user belongs to the same workspace (via workspace_users)
+    // Verify workspace membership
     const workspaceUser = await prisma.workspaceUser.findUnique({
       where: {
         userId_workspaceId: {
@@ -78,13 +77,8 @@ class DepartmentUserService {
       },
     });
 
-    if (!workspaceUser) {
-      throw new Error('User does not belong to this workspace. User must be added to workspace first');
-    }
-
-    // Validate role
-    if (data.role !== 'DEPARTMENT_MANAGER' && data.role !== 'HUMAN_SUPPORT' && data.role !== 'MEMBER') {
-      throw new Error('Role must be DEPARTMENT_MANAGER, HUMAN_SUPPORT, or MEMBER');
+    if (!workspaceUser || workspaceUser.status !== 'ACTIVE') {
+      throw new Error('User is not an active member of this workspace. Add to workspace first.');
     }
 
     // Check if user is already in this department
@@ -101,13 +95,14 @@ class DepartmentUserService {
       throw new Error('User is already assigned to this department');
     }
 
-    // Add user to department
+    // Direct Add (Admin Action)
     try {
       const departmentUser = await prisma.departmentUser.create({
         data: {
           userId: user.id,
           departmentId: departmentId,
           role: data.role,
+          status: 'ACTIVE',
         },
         include: {
           user: {
@@ -132,12 +127,21 @@ class DepartmentUserService {
       await redis.del(`department:${departmentId}`);
       await redis.del(`department_users:department:${departmentId}`);
 
+      // Send notification email
+      try {
+        const invitationService = new InvitationService();
+        await invitationService.sendAllocationEmail(user.email, {
+          type: 'DEPARTMENT',
+          entityName: department.name,
+          accountName: department.workspace.account.name,
+          role: data.role,
+        });
+      } catch (emailError) {
+        logger.error('Failed to send assignment email:', emailError);
+      }
+
       return departmentUser;
     } catch (error) {
-      // Handle Prisma unique constraint violation
-      if (error.code === 'P2002') {
-        throw new Error('User is already assigned to this department');
-      }
       logger.error('Error adding user to department:', error);
       throw new Error('Failed to add user to department');
     }
@@ -167,36 +171,14 @@ class DepartmentUserService {
       throw new Error('Department does not belong to this account');
     }
 
-    // Verify caller has permission
-    // Allowed: ACCOUNT_ADMIN, WORKSPACE_ADMIN, DEPARTMENT_MANAGER (for their own department)
+    // Check if caller is WORKSPACE_ADMIN or APP_OWNER
     let hasPermission = false;
-
-    if (callerInfo.accountRole === 'ADMIN') {
+    if (callerInfo.workspaceRole === 'ADMIN' || callerInfo.isAppOwner) {
       hasPermission = true;
     }
 
-    if (!hasPermission && callerInfo.workspaceRole === 'ADMIN') {
-      hasPermission = true;
-    }
-
-    // Check if caller is DEPARTMENT_MANAGER of this specific department
     if (!hasPermission) {
-      const callerDepartmentUser = await prisma.departmentUser.findUnique({
-        where: {
-          userId_departmentId: {
-            userId: callerInfo.userId,
-            departmentId: departmentId,
-          },
-        },
-      });
-
-      if (callerDepartmentUser && callerDepartmentUser.role === 'DEPARTMENT_MANAGER') {
-        hasPermission = true;
-      }
-    }
-
-    if (!hasPermission) {
-      throw new Error('Insufficient permissions. Only ACCOUNT_ADMIN, WORKSPACE_ADMIN, or DEPARTMENT_MANAGER can update department user roles');
+      throw new Error('Insufficient permissions. Only WORKSPACE_ADMIN can update department user roles');
     }
 
     // Verify user exists in this department
@@ -284,36 +266,14 @@ class DepartmentUserService {
       throw new Error('Department does not belong to this account');
     }
 
-    // Verify caller has permission
-    // Allowed: ACCOUNT_ADMIN, WORKSPACE_ADMIN, DEPARTMENT_MANAGER (for their own department)
+    // Check if caller is WORKSPACE_ADMIN or APP_OWNER
     let hasPermission = false;
-
-    if (callerInfo.accountRole === 'ADMIN') {
+    if (callerInfo.workspaceRole === 'ADMIN' || callerInfo.isAppOwner) {
       hasPermission = true;
     }
 
-    if (!hasPermission && callerInfo.workspaceRole === 'ADMIN') {
-      hasPermission = true;
-    }
-
-    // Check if caller is DEPARTMENT_MANAGER of this specific department
     if (!hasPermission) {
-      const callerDepartmentUser = await prisma.departmentUser.findUnique({
-        where: {
-          userId_departmentId: {
-            userId: callerInfo.userId,
-            departmentId: departmentId,
-          },
-        },
-      });
-
-      if (callerDepartmentUser && callerDepartmentUser.role === 'DEPARTMENT_MANAGER') {
-        hasPermission = true;
-      }
-    }
-
-    if (!hasPermission) {
-      throw new Error('Insufficient permissions. Only ACCOUNT_ADMIN, WORKSPACE_ADMIN, or DEPARTMENT_MANAGER can remove users from departments');
+      throw new Error('Insufficient permissions. Only WORKSPACE_ADMIN can remove users from departments');
     }
 
     // Verify user exists in this department
@@ -371,7 +331,7 @@ class DepartmentUserService {
     }
 
     const cacheKey = `department_users:department:${departmentId}`;
-    
+
     // Try cache first
     const cached = await redis.get(cacheKey);
     if (cached) {

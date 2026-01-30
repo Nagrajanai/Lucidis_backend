@@ -1,6 +1,7 @@
 const prisma = require('../config/database');
 const { logger } = require('../utils/logger');
 const redis = require('../config/redis');
+const { InvitationService } = require('./invitation.service');
 
 class WorkspaceService {
   async createWorkspace(accountId, data) {
@@ -40,17 +41,36 @@ class WorkspaceService {
     }
   }
 
-  async getWorkspaces(accountId) {
-    const cacheKey = `workspaces:account:${accountId}`;
-    
+  async getWorkspaces(accountId, userId, isAppOwner = false, accountRole = null) {
+    const isFullAccess = isAppOwner || accountRole === 'ADMIN';
+    const accountPart = accountId ? `account:${accountId}` : 'all_accounts';
+    const cacheKey = isFullAccess
+      ? `workspaces:${accountPart}`
+      : `workspaces:${accountPart}:user:${userId}`;
+
     // Try cache first
     const cached = await redis.get(cacheKey);
     if (cached) {
       return JSON.parse(cached);
     }
 
+    const where = {};
+    if (accountId) {
+      where.accountId = accountId;
+    }
+
+    // If not AppOwner or Account Admin, only show workspaces user is a member of
+    if (!isFullAccess) {
+      where.workspaceUsers = {
+        some: {
+          userId,
+          status: 'ACTIVE',
+        },
+      };
+    }
+
     const workspaces = await prisma.workspace.findMany({
-      where: { accountId },
+      where,
       include: {
         departments: {
           select: {
@@ -71,7 +91,7 @@ class WorkspaceService {
 
   async getWorkspaceById(workspaceId, accountId) {
     const cacheKey = `workspace:${workspaceId}`;
-    
+
     // Try cache first
     const cached = await redis.get(cacheKey);
     if (cached) {
@@ -159,12 +179,20 @@ class WorkspaceService {
     return { success: true };
   }
 
-  async addUserToWorkspace(workspaceId, accountId, data, callerAccountRole) {
+  async addUserToWorkspace(workspaceId, accountId, data, callerAccountRole, callerWorkspaceRole, invitedByUserId, isAppOwner = false) {
     // Verify workspace exists and belongs to account
     const workspace = await prisma.workspace.findFirst({
       where: {
         id: workspaceId,
         accountId,
+      },
+      include: {
+        account: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
       },
     });
 
@@ -172,36 +200,16 @@ class WorkspaceService {
       throw new Error('Workspace not found');
     }
 
-    // Find user by email
-    const user = await prisma.user.findUnique({
-      where: { email: data.email },
-    });
-
-    if (!user) {
-      throw new Error('User not found');
-    }
-
-    // Verify user belongs to same account
-    const accountUser = await prisma.accountUser.findUnique({
-      where: {
-        userId_accountId: {
-          userId: user.id,
-          accountId,
-        },
-      },
-    });
-
-    if (!accountUser) {
-      throw new Error('User does not belong to this account');
-    }
-
-    // Determine role: default to MEMBER, allow explicit role only if caller is ACCOUNT_ADMIN
+    // Determine role: default to MEMBER, allow explicit role only if caller is ADMIN (Account or Workspace) or AppOwner
     let role = 'MEMBER';
-    
+
     if (data.role) {
-      // Only ACCOUNT_ADMIN can set explicit role
-      if (callerAccountRole !== 'ADMIN') {
-        throw new Error('Only ACCOUNT_ADMIN can assign explicit roles');
+      // Only ADMINs or AppOwner can set explicit roles
+      const isAccountAdmin = callerAccountRole === 'ADMIN';
+      const isWorkspaceAdmin = callerWorkspaceRole === 'ADMIN';
+
+      if (!isAccountAdmin && !isWorkspaceAdmin && !isAppOwner) {
+        throw new Error('Only admins can assign explicit roles');
       }
       role = data.role;
     }
@@ -211,7 +219,30 @@ class WorkspaceService {
       throw new Error('Role must be ADMIN or MEMBER');
     }
 
-    // Insert or update workspace_users
+    // Find user by email
+    const user = await prisma.user.findUnique({
+      where: { email: data.email },
+    });
+
+    if (!user) {
+      throw new Error('User not found. User must be added to the Account first.');
+    }
+
+    // Verify user belongs to the same account (via account_users)
+    const accountUser = await prisma.accountUser.findUnique({
+      where: {
+        userId_accountId: {
+          userId: user.id,
+          accountId,
+        },
+      },
+    });
+
+    if (!accountUser || accountUser.status !== 'ACTIVE') {
+      throw new Error('User is not an active member of this account. Add to account first.');
+    }
+
+    // Create membership with userId and status = ACTIVE
     try {
       const workspaceUser = await prisma.workspaceUser.upsert({
         where: {
@@ -224,6 +255,7 @@ class WorkspaceService {
           userId: user.id,
           workspaceId,
           role,
+          status: 'ACTIVE',
         },
         update: {
           role,
@@ -244,6 +276,20 @@ class WorkspaceService {
       await redis.del(`workspace:${workspaceId}`);
       await redis.del(`workspaces:account:${accountId}`);
 
+      // Send notification email
+      try {
+        const invitationService = new InvitationService();
+        await invitationService.sendAllocationEmail(user.email, {
+          type: 'WORKSPACE',
+          entityName: workspace.name,
+          accountName: workspace.account.name,
+          role: role,
+        });
+      } catch (emailError) {
+        logger.error('Failed to send assignment email:', emailError);
+        // Do not fail the operation
+      }
+
       return workspaceUser;
     } catch (error) {
       logger.error('Error adding user to workspace:', error);
@@ -253,4 +299,3 @@ class WorkspaceService {
 }
 
 module.exports = { WorkspaceService };
-

@@ -1,3 +1,4 @@
+const prisma = require('../config/database');
 const { WorkspaceService } = require('../services/workspace.service');
 
 const workspaceService = new WorkspaceService();
@@ -8,11 +9,10 @@ class WorkspaceController {
       const accountId = req.body.accountId || req.tenant?.accountId;
 
       if (!accountId) {
-        res.status(400).json({
+        return res.status(400).json({
           success: false,
-          error: 'Account ID is required',
+          error: 'Account ID is required. Provide it in body or header (x-account-id)',
         });
-        return;
       }
 
       const workspace = await workspaceService.createWorkspace(accountId, req.body);
@@ -37,15 +37,20 @@ class WorkspaceController {
     try {
       const accountId = req.query.accountId || req.tenant?.accountId;
 
-      if (!accountId) {
+      // APP_OWNER still needs an accountId to know which account to list
+      if (req.user?.isAppOwner && !accountId) {
         res.status(400).json({
           success: false,
-          error: 'Account ID is required',
+          error: 'Account ID is required for AppOwners',
         });
         return;
       }
 
-      const workspaces = await workspaceService.getWorkspaces(accountId);
+      const isAppOwner = req.user?.isAppOwner || false;
+      const accountRole = req.tenant?.accountRole;
+      const userId = req.user?.id;
+
+      const workspaces = await workspaceService.getWorkspaces(accountId, userId, isAppOwner, accountRole);
 
       const response = {
         success: true,
@@ -64,14 +69,14 @@ class WorkspaceController {
 
   async getWorkspaceById(req, res) {
     try {
-      const accountId = req.query.accountId || req.tenant?.accountId;
+      const accountId = req.tenant?.accountId;
+      const workspaceId = req.params.id;
 
       if (!accountId) {
-        res.status(400).json({
+        return res.status(400).json({
           success: false,
-          error: 'Account ID is required',
+          error: 'Account ID could not be resolved. Ensure you are providing correct headers or path.',
         });
-        return;
       }
 
       const workspace = await workspaceService.getWorkspaceById(req.params.id, accountId);
@@ -93,14 +98,14 @@ class WorkspaceController {
 
   async updateWorkspace(req, res) {
     try {
-      const accountId = req.query.accountId || req.tenant?.accountId;
+      const accountId = req.tenant?.accountId;
+      const workspaceId = req.params.id;
 
       if (!accountId) {
-        res.status(400).json({
+        return res.status(400).json({
           success: false,
-          error: 'Account ID is required',
+          error: 'Account ID could not be resolved.',
         });
-        return;
       }
 
       const workspace = await workspaceService.updateWorkspace(req.params.id, accountId, req.body);
@@ -123,14 +128,13 @@ class WorkspaceController {
 
   async deleteWorkspace(req, res) {
     try {
-      const accountId = req.query.accountId || req.tenant?.accountId;
+      const accountId = req.tenant?.accountId;
 
       if (!accountId) {
-        res.status(400).json({
+        return res.status(400).json({
           success: false,
-          error: 'Account ID is required',
+          error: 'Account ID could not be resolved.',
         });
-        return;
       }
 
       await workspaceService.deleteWorkspace(req.params.id, accountId);
@@ -153,24 +157,37 @@ class WorkspaceController {
   async addUserToWorkspace(req, res) {
     try {
       const workspaceId = req.params.workspaceId;
-      const accountId = req.query.accountId || req.tenant?.accountId;
+      const accountId = req.tenant?.accountId;
 
-      if (!accountId) {
-        res.status(400).json({
+      if (!accountId || !workspaceId) {
+        return res.status(400).json({
           success: false,
-          error: 'Account ID is required',
+          error: 'Workspace context missing.',
+        });
+      }
+
+      // Get caller's roles for role assignment validation
+      const callerAccountRole = req.tenant?.accountRole;
+      const callerWorkspaceRole = req.tenant?.workspaceRole;
+      const isAppOwner = req.user?.isAppOwner || false;
+      const invitedByUserId = req.user?.id;
+
+      if (!invitedByUserId) {
+        res.status(401).json({
+          success: false,
+          error: 'User ID is required',
         });
         return;
       }
-
-      // Get caller's account role for role assignment validation
-      const callerAccountRole = req.tenant?.accountRole;
 
       const workspaceUser = await workspaceService.addUserToWorkspace(
         workspaceId,
         accountId,
         req.body,
-        callerAccountRole
+        callerAccountRole,
+        callerWorkspaceRole,
+        invitedByUserId,
+        isAppOwner
       );
 
       const response = {
